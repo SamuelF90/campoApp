@@ -6,3 +6,6 @@
 
 # Generacion del ejecutable Windows
 pyinstaller==6.22.3
+
+# Pruebas automatizadas
+pytest==8.4.2

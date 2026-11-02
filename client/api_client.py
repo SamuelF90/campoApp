@@ -14,7 +14,9 @@ class APIError(Exception):
     """
     Error controlado producido al comunicarnos con Campo POS API.
     """
-    pass
+    def __init__(self, mensaje, status_code=None):
+        super().__init__(mensaje)
+        self.status_code = status_code
 
 
 # ============================================================
@@ -33,12 +35,20 @@ class APIClient:
         self,
         base_url=None,
         timeout=90,
+        api_key=None,
     ):
+        configuracion = cargar_configuracion()
+
         if base_url is None:
-            base_url = cargar_configuracion()["api_url"]
+            base_url = configuracion["api_url"]
 
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
+        self.api_key = (
+            api_key
+            or os.getenv("CAMPO_API_KEY")
+            or configuracion.get("api_key")
+        )
 
 
     # ========================================================
@@ -125,6 +135,11 @@ class APIClient:
                 kwargs["json"]
             )
 
+        headers = dict(kwargs.get("headers") or {})
+        if self.api_key:
+            headers["X-API-Key"] = self.api_key
+        kwargs["headers"] = headers
+
         try:
             response = requests.request(
                 method,
@@ -163,7 +178,7 @@ class APIClient:
             else:
                 mensaje = f"Error HTTP {response.status_code}"
 
-            raise APIError(mensaje)
+            raise APIError(mensaje, status_code=response.status_code)
 
         return data
 

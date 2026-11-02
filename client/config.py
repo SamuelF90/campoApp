@@ -17,6 +17,7 @@ DEFAULT_API_URL = "https://campo-pos-api.onrender.com"
 def cargar_configuracion():
     config = {
         "api_url": DEFAULT_API_URL,
+        "api_key": "",
     }
 
     try:
@@ -34,6 +35,11 @@ def cargar_configuracion():
     ).strip()
 
     config["api_url"] = api_url.rstrip("/")
+    config["api_key"] = str(
+        os.getenv("CAMPO_API_KEY")
+        or config.get("api_key")
+        or ""
+    ).strip()
     return config
 
 

@@ -2269,6 +2269,7 @@ class VentanaPrincipal(tk.Tk):
 
             items.append(
                 {
+                    "producto_id": producto[0],
                     "cant": cantidad,
                     "nombre": producto[1],
                     "precio_unitario": precio_unitario,

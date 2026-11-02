@@ -1,5 +1,8 @@
 # Campo POS
 
+La documentación de los cambios recientes del backend está disponible en
+[`README_CAMBIOS_BACKEND.md`](README_CAMBIOS_BACKEND.md).
+
 Sistema de punto de venta de escritorio para Campo Burger & Açaí, orientado a negocios gastronómicos pequeños y medianos.
 
 La versión actual utiliza una arquitectura cliente-servidor: la aplicación Windows no se conecta directamente a PostgreSQL. El cliente consume una API FastAPI desplegada en Render, y el backend accede a PostgreSQL en Supabase.
@@ -196,15 +199,35 @@ DB_CONNECT_TIMEOUT
 DB_POOL_MIN
 DB_POOL_MAX
 DB_TIMEZONE
+CAMPO_API_KEY
 ```
 
 Nunca versionar el archivo `.env`.
+
+La API requiere la variable `CAMPO_API_KEY` para las rutas de productos,
+caja, ventas y reportes. El cliente debe enviar esa clave en el header
+`X-API-Key`. Para el cliente instalado puede configurarse en
+`%LOCALAPPDATA%\CampoBurgerPOS\config.json`:
+
+```json
+{
+  "api_url": "https://campo-pos-api.onrender.com",
+  "api_key": "clave-configurada-en-render"
+}
+```
+
+La misma clave compartida es una protección inicial contra accesos no
+autorizados, pero no reemplaza usuarios, roles ni claves independientes por
+instalación.
 
 ### Cliente
 
 El cliente no necesita credenciales PostgreSQL.
 
 Solo necesita conocer la URL HTTPS de Campo POS API.
+
+También necesita la API key configurada para poder consultar el catálogo,
+registrar ventas y operar la caja.
 
 ---
 

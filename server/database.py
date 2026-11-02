@@ -767,9 +767,23 @@ class DBManager:
             )
 
         items_normalizados = []
-        total_items = Decimal("0")
 
         for posicion, item in enumerate(items, start=1):
+
+            # --------------------------------------------------------------
+            # Producto
+            # --------------------------------------------------------------
+            try:
+                producto_id = int(item["producto_id"])
+            except (KeyError, TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"Producto inválido en el ítem {posicion}."
+                ) from exc
+
+            if producto_id <= 0:
+                raise ValueError(
+                    f"Producto inválido en el ítem {posicion}."
+                )
 
             # --------------------------------------------------------------
             # Cantidad
@@ -808,16 +822,10 @@ class DBManager:
                 f"subtotal del ítem {posicion}",
             )
 
-            # --------------------------------------------------------------
-            # Precio unitario
-            # --------------------------------------------------------------
-            if item.get("precio_unitario") is not None:
-                precio_unitario = self._decimal_no_negativo(
-                    item["precio_unitario"],
-                    f"precio unitario del ítem {posicion}",
-                )
-            else:
-                precio_unitario = subtotal / Decimal(cantidad)
+            # El precio unitario definitivo se obtiene desde productos dentro
+            # de la transacción. El valor recibido del cliente no es fuente
+            # de verdad.
+            precio_unitario = None
 
             # --------------------------------------------------------------
             # PRODUCTOS VENDIDOS POR PESO
@@ -825,17 +833,17 @@ class DBManager:
             peso_gramos = item.get("peso_gramos")
             precio_kg = item.get("precio_kg")
 
-            # Si ninguno está presente, es un producto normal.
+            # El peso identifica una venta por peso. El precio por kilo del
+            # cliente es opcional y, si llega, no se usa como fuente de verdad.
             if peso_gramos is None and precio_kg is None:
                 peso_gramos = None
                 precio_kg = None
 
             else:
-                # Si viene uno, tienen que venir los dos.
-                if peso_gramos is None or precio_kg is None:
+                if peso_gramos is None:
                     raise ValueError(
-                        f"El ítem {posicion} tiene información "
-                        "de peso incompleta."
+                        f"El ítem {posicion} tiene un precio por kilo "
+                        "pero no tiene peso."
                     )
 
                 peso_gramos = self._decimal(
@@ -843,31 +851,16 @@ class DBManager:
                     f"peso en gramos del ítem {posicion}",
                 )
 
-                precio_kg = self._decimal_no_negativo(
-                    precio_kg,
-                    f"precio por kilo del ítem {posicion}",
-                )
+                if precio_kg is not None:
+                    precio_kg = self._decimal_no_negativo(
+                        precio_kg,
+                        f"precio por kilo del ítem {posicion}",
+                    )
 
                 if peso_gramos <= 0:
                     raise ValueError(
                         f"El peso del ítem {posicion} "
                         "debe ser mayor que cero."
-                    )
-
-                # Comprobamos que el subtotal enviado por la GUI
-                # coincida con peso × precio por kilo.
-                subtotal_calculado = (
-                    precio_kg
-                    * peso_gramos
-                    / Decimal("1000")
-                )
-
-                if subtotal != subtotal_calculado:
-                    raise ValueError(
-                        f"El subtotal del ítem {posicion} "
-                        "no coincide con su peso y precio por kilo. "
-                        f"Esperado: {subtotal_calculado}; "
-                        f"recibido: {subtotal}."
                     )
 
             # --------------------------------------------------------------
@@ -892,10 +885,9 @@ class DBManager:
                 "parent_detalle_id"
             )
 
-            total_items += subtotal
-
             items_normalizados.append(
                 {
+                    "producto_id": producto_id,
                     "cantidad": cantidad,
                     "nombre": nombre,
                     "precio_unitario": precio_unitario,
@@ -909,64 +901,142 @@ class DBManager:
             )
 
         # --------------------------------------------------------------
-        # Verificar total
-        # --------------------------------------------------------------
-        esperado = total_items + recargo
-
-        if total != esperado:
-            raise ValueError(
-                "El total recibido no coincide con "
-                "los detalles de la venta. "
-                f"Detalles + recargo = {esperado}; "
-                f"total recibido = {total}."
-            )
-
-        # --------------------------------------------------------------
-        # Idempotencia
-        # --------------------------------------------------------------
-        contenido_operacion = {
-            "total": str(total),
-            "metodo_pago": metodo_pago,
-            "tipo_entrega": tipo_entrega,
-            "recargo_delivery": str(recargo),
-            "items": [
-                {
-                    "cantidad": item["cantidad"],
-                    "nombre": item["nombre"],
-                    "precio_unitario": str(item["precio_unitario"]),
-                    "subtotal": str(item["subtotal"]),
-                    "notas": item["notas"],
-                    "es_extra": item["es_extra"],
-                    "parent_detalle_id": item["parent_detalle_id"],
-                    "peso_gramos": (
-                        str(item["peso_gramos"])
-                        if item["peso_gramos"] is not None
-                        else None
-                    ),
-                    "precio_kg": (
-                        str(item["precio_kg"])
-                        if item["precio_kg"] is not None
-                        else None
-                    ),
-                }
-                for item in items_normalizados
-            ],
-        }
-
-        operacion_hash = hashlib.sha256(
-            json.dumps(
-                contenido_operacion,
-                sort_keys=True,
-                ensure_ascii=False,
-                separators=(",", ":"),
-            ).encode("utf-8")
-        ).hexdigest()
-
-        # --------------------------------------------------------------
         # Guardar venta
         # --------------------------------------------------------------
         with self._connection() as conn:
             with conn.cursor() as cur:
+
+                # El catálogo se consulta dentro de la misma transacción que
+                # guarda la venta, para que el cliente no pueda fijar precios.
+                producto_ids = [
+                    item["producto_id"]
+                    for item in items_normalizados
+                ]
+                cur.execute(
+                    """
+                    SELECT id, nombre, precio, tipo_venta, categoria, subcategoria
+                    FROM productos
+                    WHERE id = ANY(%s);
+                    """,
+                    (producto_ids,),
+                )
+                productos = {
+                    fila[0]: fila
+                    for fila in cur.fetchall()
+                }
+
+                for posicion, item in enumerate(items_normalizados, start=1):
+                    producto = productos.get(item["producto_id"])
+
+                    if producto is None:
+                        raise ValueError(
+                            f"No existe el producto #{item['producto_id']} "
+                            f"del ítem {posicion}."
+                        )
+
+                    _, nombre, precio, tipo_venta, categoria, subcategoria = producto
+                    precio = self._decimal_no_negativo(
+                        precio,
+                        f"precio del producto #{item['producto_id']}",
+                    )
+
+                    if tipo_venta == "unidad":
+                        if (
+                            item["peso_gramos"] is not None
+                            or item["precio_kg"] is not None
+                        ):
+                            raise ValueError(
+                                f"El producto #{item['producto_id']} "
+                                "no se vende por peso."
+                            )
+
+                        subtotal = precio * Decimal(item["cantidad"])
+                        precio_unitario = precio
+
+                    elif tipo_venta == "peso":
+                        if item["peso_gramos"] is None:
+                            raise ValueError(
+                                f"El producto #{item['producto_id']} "
+                                "requiere peso en gramos."
+                            )
+
+                        if item["cantidad"] != 1:
+                            raise ValueError(
+                                "Los productos vendidos por peso deben "
+                                "tener cantidad 1."
+                            )
+
+                        subtotal = (
+                            precio
+                            * item["peso_gramos"]
+                            / Decimal("1000")
+                        )
+                        precio_unitario = subtotal
+                        item["precio_kg"] = precio
+
+                    else:
+                        raise ValueError(
+                            f"Tipo de venta inválido para el producto "
+                            f"#{item['producto_id']}."
+                        )
+
+                    item["nombre"] = nombre
+                    item["precio_unitario"] = precio_unitario
+                    item["subtotal"] = subtotal
+                    item["es_extra"] = (
+                        str(categoria or "").strip().upper() == "AGREGADOS"
+                        or str(subcategoria or "").strip().upper() == "EXTRAS"
+                    )
+
+                esperado = sum(
+                    (item["subtotal"] for item in items_normalizados),
+                    Decimal("0"),
+                ) + recargo
+
+                if total != esperado:
+                    raise ValueError(
+                        "El total recibido no coincide con los precios "
+                        "vigentes del catálogo."
+                    )
+
+                contenido_operacion = {
+                    "total": str(total),
+                    "metodo_pago": metodo_pago,
+                    "tipo_entrega": tipo_entrega,
+                    "recargo_delivery": str(recargo),
+                    "items": [
+                        {
+                            "producto_id": item["producto_id"],
+                            "cantidad": item["cantidad"],
+                            "nombre": item["nombre"],
+                            "precio_unitario": str(item["precio_unitario"]),
+                            "subtotal": str(item["subtotal"]),
+                            "notas": item["notas"],
+                            "es_extra": item["es_extra"],
+                            "parent_detalle_id": item["parent_detalle_id"],
+                            "peso_gramos": (
+                                str(item["peso_gramos"])
+                                if item["peso_gramos"] is not None
+                                else None
+                            ),
+                            "precio_kg": (
+                                str(item["precio_kg"])
+                                if item["precio_kg"] is not None
+                                else None
+                            ),
+                        }
+                        for item in items_normalizados
+                    ],
+                }
+
+                operacion_hash = hashlib.sha256(
+                    json.dumps(
+                        contenido_operacion,
+                        sort_keys=True,
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ).encode("utf-8")
+                ).hexdigest()
 
                 cur.execute(
                     """
