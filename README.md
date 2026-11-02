@@ -5,6 +5,25 @@ La documentación de los cambios recientes del backend está disponible en
 
 Sistema de punto de venta de escritorio para Campo Burger & Açaí, orientado a negocios gastronómicos pequeños y medianos.
 
+## Resumen de mejoras recientes
+
+El backend ahora cuenta con controles adicionales para mejorar la seguridad y
+la confiabilidad del sistema:
+
+- Las rutas importantes requieren una API key para poder utilizarse.
+- Los errores se responden de forma más clara según el problema ocurrido.
+- El backend consulta los precios reales desde la base de datos.
+- Los subtotales y totales se recalculan en el servidor.
+- Cada producto de una venta se identifica mediante `producto_id`.
+- Se validan mejor cantidades, montos, UUID y datos inesperados.
+- `/health` ya no muestra información sensible de la base de datos.
+- Se agregaron pruebas automatizadas para validar estos comportamientos.
+- El cliente fue actualizado para enviar la API key y el ID de cada producto.
+
+En resumen, el backend ya no confía completamente en los datos recibidos del
+cliente: verifica quién realiza la operación, comprueba la información y
+calcula los importes desde el catálogo central.
+
 La versión actual utiliza una arquitectura cliente-servidor: la aplicación Windows no se conecta directamente a PostgreSQL. El cliente consume una API FastAPI desplegada en Render, y el backend accede a PostgreSQL en Supabase.
 
 ---
